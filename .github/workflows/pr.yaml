@@ -1,0 +1,65 @@
+name: openstack operator image builder
+
+on:
+  push:
+    branches:
+      - '*'
+
+env:
+  imageregistry: 'quay.io'
+  imagenamespace: 'openstack-k8s-operators'
+  latesttag: latest
+
+jobs:
+  build-operator-index:
+    name: operator-index
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Install Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: 1.20.x
+
+    - name: Checkout ${{ inputs.operator_name }}-operator repository
+      uses: actions/checkout@v4
+
+    - name: Get branch name
+      id: branch-name
+      uses: tj-actions/branch-names@v7
+
+    - name: Set latest tag for non main branch
+      if: "${{ steps.branch-name.outputs.current_branch != 'main' }}"
+      run: |
+        echo "latesttag=${{ steps.branch-name.outputs.current_branch }}-latest" >> $GITHUB_ENV
+
+    - name: Install opm
+      uses: redhat-actions/openshift-tools-installer@v1
+      with:
+        source: github
+        opm: 'latest'
+
+    - name: Create index image
+      shell: bash
+      run: |
+        pushd "${GITHUB_WORKSPACE}"
+        git status
+        git diff
+        go version
+        go list -mod=readonly -m -json all || true
+
+        go list -m -json all || true
+        CATALOG_EXTRA_BUNDLES=""
+        CATALOG_EXTRA_BUNDLES=$(/bin/bash ./hack/pin-bundle-images.sh)
+        make tidy
+        git status
+        git diff
+        opm index add --bundles "${REGISTRY}/${BUNDLE_IMAGE}:${GITHUB_SHA}${CATALOG_EXTRA_BUNDLES}" --tag "${REGISTRY}/${INDEX_IMAGE}:${GITHUB_SHA}" -u podman --pull-tool podman
+        podman tag "${REGISTRY}/${INDEX_IMAGE}:${GITHUB_SHA}" "${REGISTRY}/${INDEX_IMAGE}:${INDEX_IMAGE_TAG}"
+        popd
+      env:
+        REGISTRY:  ${{ env.imageregistry }}/${{ env.imagenamespace }}
+        GITHUB_SHA: ${{ github.sha }}
+        BUNDLE_IMAGE: openstack-operator-bundle
+        INDEX_IMAGE_TAG: latest
+        INDEX_IMAGE: openstack-operator-index
